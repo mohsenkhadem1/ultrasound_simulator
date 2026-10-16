@@ -54,7 +54,11 @@ def advect_gaussians(model, positions, probe_pose):
 
 
 def pack_gaussian_frame(model, positions, probe_pose, header):
-    """Version 1: 16 float header then N x 11 floats; all SI units."""
+    """Version 1: 16 float header then N x 11 floats; all SI units.
+
+    Header 10:13 carries minimum J, peak displacement and stress; 13 is
+    paused (supplied by the caller), 14 flags an invalid tissue state.
+    """
     centers, cov, displacement, stress, minimum_j = advect_gaussians(model, positions, probe_pose)
     data = np.empty((len(centers), 11), np.float32)
     data[:, :3] = centers
@@ -63,5 +67,6 @@ def pack_gaussian_frame(model, positions, probe_pose, header):
     h = np.zeros(16, np.float32)
     h[:len(header)] = header
     h[10:13] = minimum_j, displacement.max(), stress.max()
+    h[14] = minimum_j <= 0 or not np.isfinite(displacement.max())
     return h.tobytes()+data.tobytes(), dict(min_jacobian=minimum_j,
         max_displacement_mm=float(displacement.max()*1000), max_constitutive_stress_pa=float(stress.max()))

@@ -18,6 +18,8 @@ bash scripts/run_live_brain.sh --live-autoplay
 
 Move and turn the probe with the sliders, push through 0–5 mm of commanded
 travel, or start the automatic scan. Pause and reset operate on the simulation.
+Automatic scanning uses a gentler maximum 3 mm travel, follows terrain at the
+probe's actual position, and takes 12 seconds per pass.
 Orbit with the mouse and zoom with the scroll wheel. The view includes a brain
 cutaway, isolated tumour, displacement and stiffness colours, and an analytic
 stress diagnostic. Motion magnification is explicitly a display option; the
@@ -31,6 +33,8 @@ speed; the value must be a multiple of `--live-fps`. Rates depend on hardware an
 load. A local HTTP/WebSocket server binds only to `127.0.0.1`. Press Ctrl+C in
 the launching terminal to stop. Live outputs include metrics, metadata and a
 final nodal state; this mode does not record an acoustic episode.
+Every update checks volume ratios across the full FEM mesh and pauses physics
+if it detects an inverted element; the viewer displays that condition and offers reset.
 
 This is an adaptation inspired by
 [Physics-Informed Deformable Gaussian Splatting](https://arxiv.org/abs/2511.06299),
@@ -48,6 +52,8 @@ optional browser integration check requires Playwright 1.55.0 and Chromium:
 .venv-ultrasound/bin/python -m playwright install chromium
 # With the live simulation running, on a desktop display:
 DISPLAY=:1 .venv-ultrasound/bin/python scripts/check_live_brain.py
+# Separately, reset and exercise repeated automatic scans for 100 seconds:
+.venv-ultrasound/bin/python scripts/check_live_stability.py
 ```
 
 It checks actual pressing, pause, reset, scanning and WebGL errors, and records

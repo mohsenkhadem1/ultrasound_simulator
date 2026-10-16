@@ -35,9 +35,10 @@ footprints, sorts by centre depth and composites alpha from back to front.
 The stress colouring evaluates a compressible Neo-Hookean Cauchy law with the
 assumed regional modulus and Poisson ratio 0.45, then displays von Mises stress.
 It is **an analytic diagnostic**, not PhysX stress readback, measured tissue
-stress, or a learned constitutive law. The live loop pauses if any sampled
-binding tetrahedron has nonpositive determinant. This sampled check does not
-establish positivity of every simulation tetrahedron.
+stress, or a learned constitutive law. A second GPU kernel checks volume ratios
+of all FEM tetrahedra at each streamed update. The live loop pauses and the
+viewer reports an invalid state if any has nonpositive determinant. This does
+not check every intermediate substep or establish convergence of the mechanics.
 
 ## Relationship to the paper
 
@@ -75,6 +76,11 @@ meninges, vascular flow, vessel registration, tissue damage or force-controlled
 probe. Gaussian transparency and cutaways are display operations. Increasing
 motion magnification does not change the solver or acoustic data.
 
+Automatic scanning uses 3 mm maximum commanded travel and a 12-second pass.
+Terrain following evaluates the actual rate-limited probe position, avoiding
+overcompression when the head lags a target on a slope. Manual vertical travel
+is limited to 8 mm/s downward, with faster lifting to follow rising terrain.
+
 Live contact uses a configurable smaller substep count than the 240 Hz offline
 preset. Report the measured solver update rate, browser rate, simulated-time /
 wall-time ratio and determinant checks separately. Video frame rate alone is
@@ -101,3 +107,15 @@ These establish software behaviour, not agreement with a physical brain.
 Local evidence is saved under `outputs/live_gaussians_final` (browser checks,
 screenshots and MP4), and `outputs/live_20261016_120014/live_validation.json`
 (full final-state check). Generated data and videos are not tracked in Git.
+
+The subsequent repeated-scan check used the corrected terrain following,
+full-mesh GPU volume checks, direct simulation-node reads and absolute frame
+deadlines. It ran for 100.49 wall seconds with a simulated-time/wall-time ratio
+of 0.974; the median instantaneous solver update rate was 30.6 Hz. The lowest
+observed full-mesh volume ratio in its 1 Hz report was 0.822, automatic travel
+stayed at or below 3 mm, and no invalid-state pause occurred. The live renderer
+was also exercised during the run: its separate 60-second observer reported
+34.0 median frames/s and no WebGL errors. Evidence is under
+`outputs/live_gaussians_native/{repeated_scan_final,viewer_observer}.json`.
+These rates distinguish solver updates, displayed frames and actual advancement
+of the simulation clock.

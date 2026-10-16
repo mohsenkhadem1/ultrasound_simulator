@@ -4,6 +4,17 @@ import warp as wp
 
 
 @wp.kernel
+def _volume_jacobians(nodes: wp.array(dtype=wp.vec3), ids: wp.array(dtype=wp.vec4i),
+                      inverse: wp.array(dtype=wp.mat33), result: wp.array(dtype=float)):
+    i = wp.tid()
+    index = ids[i]
+    a = nodes[index[0]]
+    b, c, d = nodes[index[1]]-a, nodes[index[2]]-a, nodes[index[3]]-a
+    edges = wp.mat33(b[0], c[0], d[0], b[1], c[1], d[1], b[2], c[2], d[2])
+    result[i] = wp.determinant(edges*inverse[i])
+
+
+@wp.kernel
 def _advect(nodes: wp.array(dtype=wp.vec3), rest: wp.array(dtype=wp.vec3),
             ids: wp.array(dtype=wp.vec4i), weights: wp.array(dtype=wp.vec4),
             inverse: wp.array(dtype=wp.mat33), covariance: wp.array(dtype=wp.mat33),
@@ -58,13 +69,22 @@ def _advect(nodes: wp.array(dtype=wp.vec3), rest: wp.array(dtype=wp.vec3),
 
 
 class WarpGaussianTransport:
-    def __init__(self, model, device):
+    def __init__(self, model, device, bodies=None):
         self.device, self.model = device, model
         self.count, self.soft_count = len(model['means']), int(model['soft_count'])
         self.arrays = [wp.array(model[key], dtype=dtype, device=device) for key, dtype in
             [('means', wp.vec3), ('nodes', wp.vec4i), ('weights', wp.vec4),
              ('inverse_rest_edges', wp.mat33), ('covariance', wp.mat33), ('youngs', wp.float32)]]
         self.result = wp.empty((self.count, 12), dtype=wp.float32, device=device)
+        self.volumes = None
+        if bodies is not None:
+            offsets = np.r_[0, np.cumsum([len(b.points) for b in bodies])]
+            tets = np.concatenate([b.tetrahedra+offsets[i] for i, b in enumerate(bodies)])
+            vertices = np.concatenate([b.points for b in bodies])[tets]
+            inverse = np.linalg.inv((vertices[:, 1:]-vertices[:, :1]).transpose(0, 2, 1))
+            self.volumes = (wp.array(tets, dtype=wp.vec4i, device=device),
+                            wp.array(inverse, dtype=wp.mat33, device=device),
+                            wp.empty(len(tets), dtype=wp.float32, device=device))
 
     def pack(self, positions, probe_pose, header):
         nodes = wp.array(np.concatenate(positions), dtype=wp.vec3, device=self.device)
@@ -72,11 +92,15 @@ class WarpGaussianTransport:
         rotation = wp.quat_to_matrix(wp.quat(x, y, z, w))
         wp.launch(_advect, dim=self.count, inputs=[nodes, *self.arrays, self.soft_count,
             rotation, wp.vec3(*map(float, probe_pose[:3])), self.result], device=self.device)
+        if self.volumes is not None:
+            wp.launch(_volume_jacobians, dim=len(self.volumes[0]), inputs=[nodes, *self.volumes], device=self.device)
         values = self.result.numpy()
-        minimum_j = float(values[:self.soft_count, 11].min())
+        minimum_j = float((self.volumes[2].numpy() if self.volumes is not None else values[:self.soft_count, 11]).min())
         displacement, stress = float(values[:, 9].max()), float(values[:, 10].max())
         h = np.zeros(16, np.float32)
         h[:len(header)] = header
         h[10:13] = minimum_j, displacement, stress
+        h[14] = minimum_j <= 0 or not np.isfinite(displacement)
         return h.tobytes()+values[:, :11].copy().tobytes(), dict(min_jacobian=minimum_j,
+            jacobian_scope='all FEM tetrahedra' if self.volumes is not None else 'Gaussian binding tetrahedra',
             max_displacement_mm=displacement*1000, max_constitutive_stress_pa=stress)

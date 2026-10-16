@@ -49,6 +49,8 @@ class LiveServer:
         with self.lock:
             self.latest = packet
             self.sequence += 1
+            if 'error' not in status:
+                self.status.pop('error', None)
             self.status.update(status, ready=True)
 
     async def _serve(self):

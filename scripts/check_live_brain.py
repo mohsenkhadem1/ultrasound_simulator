@@ -55,7 +55,7 @@ def main():
             page.screenshot(path=str(args.output/'displacement.png'))
             page.locator('#colour').select_option('0')
             page.locator('#auto').click()
-            for _ in range(14):
+            for _ in range(28):
                 page.wait_for_timeout(1000)
                 samples.append(dict(solver=status(), viewer=page.evaluate('viewerStats')))
             page.locator('#tumor-only').check()

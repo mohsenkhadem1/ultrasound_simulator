@@ -44,14 +44,19 @@ class GaussianTests(unittest.TestCase):
         for data in [[], dict(press_mm=float('nan')), dict(paused=1)]:
             with self.assertRaises(ValueError):
                 server.command(data)
+        server.publish(b'', dict(error='invalid tissue'))
+        server.publish(b'', {})
+        self.assertNotIn('error', server.status)
 
     @unittest.skipUnless(importlib.util.find_spec('warp'), 'optional Isaac/Warp environment required')
     def test_warp_transport_matches_cpu_affine_and_rigid_rotation(self):
         import warp as wp
+        from types import SimpleNamespace
         from deform_sim.gaussians_warp import WarpGaussianTransport
         wp.init()
         device = 'cuda:0' if wp.is_cuda_available() else 'cpu'
-        transport = WarpGaussianTransport(self.model, device)
+        body = SimpleNamespace(points=self.vertices, tetrahedra=np.array([[0, 1, 2, 3]]))
+        transport = WarpGaussianTransport(self.model, device, [body])
         f = np.array([[.9, .1, 0], [0, 1.1, .05], [0, 0, .95]], np.float32)
         pose = [.1, .2, .3, 0, 0, np.sin(.2), np.cos(.2)]
         positions = [self.vertices@f.T]
@@ -59,6 +64,9 @@ class GaussianTests(unittest.TestCase):
         actual, _ = transport.pack(positions, pose, [1, .2, 3, 2])
         np.testing.assert_allclose(np.frombuffer(actual, np.float32),
             np.frombuffer(expected, np.float32), rtol=1e-4, atol=.002)
+        inverted, info = transport.pack([self.vertices*np.array([-1, 1, 1])], pose, [])
+        self.assertLess(info['min_jacobian'], 0)
+        self.assertEqual(np.frombuffer(inverted, np.float32)[14], 1)
 
 
 if __name__ == '__main__':
