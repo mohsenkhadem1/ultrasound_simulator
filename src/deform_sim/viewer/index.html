@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Live deformable brain · Gaussian view</title><link rel="stylesheet" href="/style.css"></head>
-<body>
+<body class="with-ultrasound">
 <canvas id="scene" aria-label="Interactive 3D Gaussian brain and tumour"></canvas>
 <header><span class="mark">◉</span><div><h1>Deformable brain</h1><p>Live material Gaussians · patient mesh prior</p></div><span id="connection">Connecting…</span></header>
 <aside>
@@ -9,8 +9,10 @@
  <label>Scan across tumour <output id="scan-value">0.0 mm</output><input id="scan" type="range" min="-32" max="32" step="0.25" value="0"></label>
  <label>Move sideways <output id="side-value">0.0 mm</output><input id="side" type="range" min="-6" max="6" step="0.25" value="0"></label>
  <label>Turn probe <output id="yaw-value">0.0°</output><input id="yaw" type="range" min="-15" max="15" step="0.5" value="0"></label>
+ <button id="us-press" class="secondary">Start fixed-plane press · US tracking</button>
  <button id="reset" class="secondary">Reset tissue and probe</button></div>
  <div class="section"><div class="eyebrow">3D VIEW</div>
+ <label>Geometry source <select id="geometry-source"><option value="estimate">Ultrasound estimate + MRI prior</option><option value="simulation">Simulation reference</option></select></label>
  <label class="row"><input id="cutaway" type="checkbox" checked> Open brain cutaway</label>
  <label class="row"><input id="tumor-only" type="checkbox"> Isolate tumour</label>
  <label class="row"><input id="plane" type="checkbox" checked> Show ultrasound plane</label>
@@ -19,8 +21,9 @@
  <label>Motion magnification <select id="magnify"><option value="1">1× · actual deformation</option><option value="2">2× · view only</option><option value="4">4× · view only</option></select></label>
  <div class="legend" id="anatomy-legend"><span><i class="brain"></i>Brain</span><span><i class="tumor"></i>Tumour</span><span><i class="ventricle"></i>Ventricles</span></div></div>
  <div id="field-legend" hidden><div class="ramp"></div><div class="ramp-labels"><span id="field-low"></span><span id="field-high"></span></div></div>
- <details><summary>Model and controls</summary><p>Drag to orbit. Scroll to zoom. Arrow keys move the probe; R/F increase/decrease pressure. Space pauses physics.</p><p>Gaussians follow Isaac Sim tissue mechanics. Covariance follows the local deformation gradient. Stiffness is an assumed prior. Stress colours show an analytic constitutive diagnostic.</p><p>This live mode is driven by simulation; it does not estimate deformation from an ultrasound stream. Acoustic RF rendering is a separate offline process.</p><a href="https://arxiv.org/abs/2511.06299" target="_blank" rel="noopener">PIDG paper ↗</a></details>
+ <details><summary>Model and controls</summary><p>Drag to orbit. Scroll to zoom. Arrow keys move the probe; R/F increase/decrease pressure. Space pauses physics.</p><p>Simulation reference follows Isaac physics. The ultrasound estimate uses image motion, tracked probe poses and an initial elastic MRI mesh. Out-of-plane motion follows the prior. Stiffness is assumed.</p><p>The current-image preview uses a coherent IQ point-spread model. RF/SIMUS scan reconstruction is available separately.</p><a href="/reconstruction.html">Open RF-derived 3D reconstruction ↗</a></details>
 </aside>
-<div class="metrics"><div><b id="motion">—</b><span>peak surface motion</span></div><div><b id="stream-rate">—</b><span>physics → Gaussian updates</span></div><div><b id="render-rate">—</b><span>viewer frames / second</span></div><div><b id="time">—</b><span>simulation time</span></div><div><b id="count">—</b><span>anisotropic Gaussians</span></div></div>
+<section class="live-us-panel"><div class="eyebrow">CORRESPONDING ULTRASOUND</div><img id="us-image" alt="Waiting for the ultrasound observation" width="288" height="346"><p id="us-model">Waiting for the ultrasound worker…</p><p id="us-estimate">Hold the scan plane still for image-based deformation tracking.</p><a href="/reconstruction.html">RF-derived scan → 3D reconstruction ↗</a>
+<div class="metrics"><div><b id="motion">—</b><span id="motion-caption">peak inferred motion</span></div><div><b id="stream-rate">—</b><span>physics solver updates</span></div><div><b id="render-rate">—</b><span>viewer frames / second</span></div><div><b id="time">—</b><span>displayed image time</span></div><div><b id="count">—</b><span>anisotropic Gaussians</span></div></div></section>
 <footer><span id="state">Starting the live view…</span><span id="renderer"></span></footer>
 <script type="module" src="/app.js"></script></body></html>

@@ -24,7 +24,7 @@ def main():
 
     errors, samples = [], []
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False, args=['--no-sandbox', '--use-gl=angle', '--use-angle=gl'])
+        browser = p.chromium.launch(headless=False, args=['--no-sandbox', '--use-gl=angle', '--use-angle=gl', '--disable-gpu-vsync', '--disable-frame-rate-limit'])
         context = browser.new_context(viewport=dict(width=1440, height=1000),
             record_video_dir=str(args.output/'recording'), record_video_size=dict(width=1440, height=1000))
         page = context.new_page()

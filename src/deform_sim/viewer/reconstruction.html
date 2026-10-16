@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ultrasound → 3D reconstruction</title><link rel="stylesheet" href="/style.css">
+<style>aside{width:278px}.us-panels{position:absolute;right:24px;top:108px;bottom:52px;width:330px;overflow:auto;background:#111b29ed;border:1px solid #263246;border-radius:16px;padding:16px}.us-panels h2{font-size:13px;margin:0 0 8px}.us-panels canvas{width:100%;height:auto;background:black;border:1px solid #263246}.us-panels p{font-size:11px;color:#9cacc0;line-height:1.5;margin:7px 0 16px}.us-panels .badge{display:inline-block;background:#173c34;color:#8ee1c2;border-radius:4px;padding:4px 6px;margin-bottom:12px;font-size:10px}.readout{font-size:12px;color:#afc1d6;line-height:1.8}.explain{font-size:11px;line-height:1.6;color:#9cacc0}.recon-nav{font-size:12px}.source-label{position:absolute;left:330px;top:112px;max-width:450px;pointer-events:none;font-size:12px;color:#d8e3f3}.source-label small{display:block;color:#98abc1;margin-top:7px;font-size:11px}.us-panels .compact{margin-bottom:8px}@media(max-width:1100px){.us-panels{width:270px;right:12px}aside{width:245px;left:12px}.source-label{left:280px;max-width:260px}}</style></head>
+<body><canvas id="scene"></canvas>
+<header><span class="mark">◉</span><div><h1>Ultrasound → 3D</h1><p>Image-based reconstruction · tracked RF-derived scan</p></div><span id="connection">Loading reconstruction…</span></header>
+<aside>
+ <div class="eyebrow">RECORDED ULTRASOUND SCAN</div>
+ <div class="buttons"><button id="play">Pause playback</button><button id="reset">Restart</button></div>
+ <label>Source frame <output id="frame-value">—</output><input id="frame" type="range" min="0" max="30" value="11" step="1"></label>
+ <label>Playback <select id="clip"><option value="pressure">Press and release · fixed plane</option><option value="scan">Full tracked 3D sweep</option></select></label>
+ <label>Playback speed <select id="speed"><option value="0.25">¼ speed</option><option value="0.5" selected>½ speed</option><option value="1">Recorded speed</option></select></label>
+ <div class="section"><div class="eyebrow">RECONSTRUCTION LAYER</div>
+ <label>3D view <select id="layer"><option value="prior">US-updated MRI mesh prior</option><option value="volume">Echo volume · ultrasound only</option><option value="both">Both layers</option></select></label>
+ <label class="row"><input id="cutaway" type="checkbox" checked> Cutaway of mesh prior</label>
+ <label class="row"><input id="plane" type="checkbox" checked> Ultrasound plane in 3D</label>
+ <label class="row"><input id="arrows" type="checkbox" checked> Estimated image-motion arrows ×4</label>
+ <label>Brain-prior opacity <input id="opacity" type="range" min=".03" max="1" step=".02" value=".6"></label>
+ <label>Motion display <select id="magnify"><option value="1">1× · actual estimate</option><option value="2">2× · display only</option><option value="4">4× · display only</option></select></label>
+ <label>Echo brightness threshold <input id="threshold" type="range" min=".24" max=".8" step=".01" value=".40"></label></div>
+ <div class="section readout"><div id="motion">—</div><div id="fit">—</div><div id="validation">—</div></div>
+ <p class="explain">The echo volume uses ultrasound images and tracked poses. Mesh shape and tumour outline start from the MRI prior; image motion updates that prior through an elastic inverse. Normal motion and unscanned anatomy follow the prior.</p>
+ <p class="explain">This is a recorded synthetic acquisition, reconstructed from its RF-derived B-mode images. Playback speed is independent of inference speed.</p>
+ <a class="recon-nav" href="/">Live probe + ultrasound ↗</a>
+</aside>
+<div class="source-label"><span id="layer-description">Ultrasound-measured motion → elastic 3D prior update</span><small id="estimate-description">Loading the image-derived estimate…</small></div>
+<section class="us-panels">
+ <span class="badge">RF → IQ → DAS → B-mode · SIMUS</span>
+ <h2>Observed ultrasound</h2><canvas id="observed" width="320" height="384"></canvas>
+ <p id="observed-label">Matched probe pose and acquisition timestamp.</p>
+ <h2 id="reslice-heading">Reconstructed ultrasound slice</h2><canvas id="reslice" width="320" height="384"></canvas>
+ <p id="reslice-label">Held-out frames are excluded from echo-volume fitting.</p>
+ <p class="compact">White: reconstructed echoes. Pink: MRI brain prior. Magenta: MRI tumour prior. Green arrows: pose-compensated image motion.</p>
+</section>
+<footer><span id="state">Preparing the reconstruction…</span><span id="renderer"></span></footer>
+<script type="module" src="/reconstruction.js"></script></body></html>

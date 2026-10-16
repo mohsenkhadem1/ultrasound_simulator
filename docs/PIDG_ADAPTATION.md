@@ -49,15 +49,16 @@ not check every intermediate substep or establish convergence of the mechanics.
 | Material representation | Time-evolving velocity and stress field | Fixed heterogeneous modulus prior and analytic diagnostic |
 | Physics | Momentum-balance residual in training | Explicit solver contact and deformation |
 | Appearance fitting | Multi-view/temporal optical losses and motion supervision | Illustrative fixed anatomy colours |
-| Ultrasound reconstruction | Not established by the paper's optical experiments | Not implemented; existing offline RF renderer remains separate |
+| Ultrasound reconstruction | Not established by the paper's optical experiments | Experimental tracked echo compounding and image-driven elastic inverse; see the reconstruction note |
 
 The learned time-dependent velocity/stress network, camera/optical-flow training,
 physics-residual optimisation and constitutive discovery have not been added.
 Those require a training dataset, supervision and held-out evaluation; replacing
-optical losses with ultrasound losses is a separate research task. This prototype
-provides a live forward model and a material-bound Gaussian representation on
-which that work can build. It does not claim to have learned the patient's
-mechanics or recovered a tumour from live ultrasound.
+optical losses with ultrasound losses is a separate research task. The added
+[ultrasound inverse](ULTRASOUND_RECONSTRUCTION.md) estimates incremental image
+motion and extends it through an initial elastic prior. It does not learn the
+patient's mechanics or segment a new tumour from live ultrasound; the anatomical
+outline remains a prior.
 
 ## Numerical and anatomical limits
 

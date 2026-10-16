@@ -6,8 +6,13 @@ export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
 if [[ ! -f data/remind-001/gaussians.npz ]]; then
   .venv-ultrasound/bin/python scripts/prepare_gaussians.py
 fi
+reconstruction_args=()
+if [[ -f outputs/ultrasound_reconstruction/manifest.json ]]; then
+  reconstruction_args+=(--ultrasound-reconstruction outputs/ultrasound_reconstruction)
+fi
 exec .venv/bin/python -u scripts/run_isaac.py \
   --headless --anatomy data/remind-001/anatomy.npz \
-  --probe-motion press --scatterers 1000 \
+  --probe-motion press --scatterers 80000 --tumor-backscatter 6 \
   --live-gaussians data/remind-001/gaussians.npz \
+  --live-ultrasound --live-ultrasound-inverse "${reconstruction_args[@]}" \
   --output "outputs/live_$(date +%Y%m%d_%H%M%S)" "$@"

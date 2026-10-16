@@ -8,10 +8,12 @@ import numpy as np
 
 
 class LiveServer:
-    def __init__(self, model, port=8765, autoplay=False):
+    def __init__(self, model, port=8765, autoplay=False, ultrasound_dir=None, reconstruction_dir=None):
         self.model, self.port = model, port
+        self.ultrasound_dir = ultrasound_dir
+        self.reconstruction_dir = reconstruction_dir
         self.controls = dict(x_mm=0., y_mm=0., press_mm=0., yaw_deg=0., auto=autoplay,
-                             paused=False, reset=False, stop=False)
+                             paused=False, reset=False, stop=False, us_press=False)
         self.lock = threading.Lock()
         self.latest = None
         self.sequence = 0
@@ -60,7 +62,7 @@ class LiveServer:
 
         async def static_file(request):
             name = request.match_info.get('name', 'index.html')
-            if name not in ('index.html', 'app.js', 'style.css'):
+            if name not in ('index.html', 'app.js', 'style.css', 'reconstruction.html', 'reconstruction.js'):
                 raise web.HTTPNotFound()
             return web.FileResponse(root/name)
 
@@ -70,6 +72,7 @@ class LiveServer:
         async def status(request):
             with self.lock:
                 data = dict(self.status, sequence=self.sequence, controls=self.controls.copy(),
+                            ultrasound_enabled=self.ultrasound_dir is not None,
                             gaussian_count=len(self.model['means']), soft_count=int(self.model['soft_count']))
             return web.json_response(data)
 
@@ -80,7 +83,28 @@ class LiveServer:
                 return web.json_response(dict(error=str(e)), status=400)
             return web.json_response(dict(ok=True))
 
+        async def ultrasound_file(request):
+            name = request.match_info['name']
+            import re
+            if self.ultrasound_dir is None or not re.fullmatch(r'(image|estimate)\.json|(estimate|volume)_\d{8}\.bin|us_\d{8}\.png', name):
+                raise web.HTTPNotFound()
+            path = self.ultrasound_dir/name
+            if not path.exists():
+                raise web.HTTPNotFound()
+            return web.FileResponse(path, headers={'Cache-Control': 'no-store'})
+
+        async def reconstruction_file(request):
+            name = request.match_info['name']
+            import re
+            if self.reconstruction_dir is None or not re.fullmatch(r'manifest\.json|prior\.bin|(us|reslice|heldout)_\d{5}\.png|(volume|prior|flow)_\d{5}\.bin', name):
+                raise web.HTTPNotFound()
+            path = self.reconstruction_dir/name
+            if not path.exists():
+                raise web.HTTPNotFound()
+            return web.FileResponse(path)
+
         async def socket(request):
+            stream = 'estimate' if request.query.get('stream') == 'estimate' else 'simulation'
             ws = web.WebSocketResponse(max_msg_size=4096, heartbeat=30, compress=False)
             await ws.prepare(request)
             with self.lock:
@@ -90,22 +114,33 @@ class LiveServer:
 
             async def send_latest():
                 previous = -1
+                last_mode = None
                 while not ws.closed:
                     with self.lock:
                         seq, packet = self.sequence, self.latest
+                    if stream != last_mode:
+                        previous = -1
+                        last_mode = stream
                     if seq != previous and packet is not None:
                         try:
-                            await ws.send_bytes(packet)
+                            if stream == 'estimate':
+                                await ws.send_json(dict(type='physics_status', header=np.frombuffer(packet, np.float32, count=16).tolist()))
+                            else:
+                                await ws.send_bytes(packet)
                         except ConnectionResetError:
                             return
                         previous = seq
-                    await asyncio.sleep(.008)
+                    await asyncio.sleep(.15 if stream == 'estimate' else .008)
             sender = asyncio.create_task(send_latest())
             try:
                 async for message in ws:
                     if message.type == WSMsgType.TEXT:
                         try:
-                            self.command(json.loads(message.data))
+                            data = json.loads(message.data)
+                            if isinstance(data, dict) and data.get('stream') in ('estimate', 'simulation'):
+                                stream = data['stream']
+                            else:
+                                self.command(data)
                         except (ValueError, TypeError) as e:
                             await ws.send_json(dict(type='error', message=str(e)))
             finally:
@@ -117,7 +152,9 @@ class LiveServer:
             return ws
 
         app.router.add_get('/', static_file)
-        app.router.add_get('/{name:app.js|style.css}', static_file)
+        app.router.add_get('/{name:app.js|style.css|reconstruction.js|reconstruction.html}', static_file)
+        app.router.add_get('/ultrasound/{name}', ultrasound_file)
+        app.router.add_get('/reconstruction/{name}', reconstruction_file)
         app.router.add_get('/model.bin', model_data)
         app.router.add_get('/api/status', status)
         app.router.add_post('/api/control', control)

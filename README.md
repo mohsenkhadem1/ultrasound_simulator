@@ -1,5 +1,49 @@
 # Isaac Sim deformable brain and tissue with acoustic ultrasound
 
+## Ultrasound observations and 3D reconstruction
+
+The browser now displays the corresponding ultrasound image beside the 3D
+model. **Geometry source** switches between an ultrasound-driven estimate and
+the simulator reference. **Start fixed-plane press** keeps the plane observable
+while the probe gently presses and releases through a 3 mm commanded stroke.
+Moving to a different plane resets local
+motion observability. Image timestamps, image age and inverse update rate are
+displayed separately from the physics and viewer rates.
+
+There are two acoustic sources:
+
+- The live preview uses a fast coherent-IQ point-spread model of the actual
+  advected scatterers, including coherent speckle and finite resolution. It
+  approximates beamformed IQ; it does not calculate channel RF.
+- The recorded reconstruction uses the existing **SIMUS RF → IQ → DAS B-mode**
+  scan. The reconstruction page shows the observed image, reconstructed reslice,
+  image-motion arrows, an image-only echo volume, and an ultrasound-updated MRI
+  mesh prior. Its playback is explicitly a recorded synthetic acquisition.
+
+```bash
+# Build from the existing tracked acoustic scan (no deformed states read):
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 .venv-ultrasound/bin/python \
+  scripts/reconstruct_ultrasound.py
+
+# Run live physics, ultrasound preview and the observation-only inverse worker:
+bash scripts/run_live_brain.sh
+# In another terminal, open the live image + estimate:
+.venv-ultrasound/bin/python scripts/open_live_viewer.py
+# Or the RF-derived scan reconstruction:
+.venv-ultrasound/bin/python scripts/open_live_viewer.py --reconstruction
+```
+
+The reconstruction uses image intensities, calibrated pixel coordinates,
+tracked probe poses and an **initial** elastic mesh. It does not ingest the
+simulator's deformed tissue state or loading command. The MRI tumour outline
+remains an input prior: this does not segment a new tumour from ultrasound.
+Only in-plane image motion is measured; the elastic prior determines the 3D
+extension. Tracking drift and release-phase error remain substantial. See
+[method, timing and independent evaluation](docs/ULTRASOUND_RECONSTRUCTION.md).
+The first elastic precomputation takes tens of seconds; subsequent inverse
+updates are slower than the physics loop. Reconstruction exports include a
+voxel intensity/coverage NPZ, inferred states, source hashes and held-out metrics.
+
 ## Live 3D Gaussian brain and tumour
 
 The live viewer uses the patient mesh prior to initialise 45,192 anisotropic
@@ -32,16 +76,18 @@ The viewer displays measured stream and render rates separately. Use
 speed; the value must be a multiple of `--live-fps`. Rates depend on hardware and
 load. A local HTTP/WebSocket server binds only to `127.0.0.1`. Press Ctrl+C in
 the launching terminal to stop. Live outputs include metrics, metadata and a
-final nodal state; this mode does not record an acoustic episode.
+final nodal state. The current-image workers write bounded live image/estimate
+buffers rather than a complete RF acoustic episode.
 Every update checks volume ratios across the full FEM mesh and pauses physics
 if it detects an inverted element; the viewer displays that condition and offers reset.
 
 This is an adaptation inspired by
 [Physics-Informed Deformable Gaussian Splatting](https://arxiv.org/abs/2511.06299),
 using an explicit FEM/material prior. **It is not a reproduction of the paper's
-trained velocity/stress field or optical reconstruction system**, and does not
-estimate deformation from ultrasound. See [the method mapping](docs/PIDG_ADAPTATION.md).
-Acoustic RF simulation remains the separate offline process below.
+trained velocity/stress field or optical reconstruction system**. The new image
+motion / elastic inverse is described above; see also
+[the PIDG method mapping](docs/PIDG_ADAPTATION.md). Full acoustic RF simulation
+remains the separate offline process below.
 
 To regenerate the prior, run `.venv-ultrasound/bin/python scripts/prepare_gaussians.py`.
 The Gaussian server uses Isaac's existing `aiohttp` and Warp packages. The

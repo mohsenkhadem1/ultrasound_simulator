@@ -1,6 +1,9 @@
 """Interactive Isaac GPU physics -> material Gaussians -> browser loop."""
 import json
 import time
+import os
+from pathlib import Path
+import subprocess
 import numpy as np
 from .live_server import LiveServer
 from .probe_motion import scan_terrain, scan_pose
@@ -25,7 +28,22 @@ def run_live(args, app, world, bodies, tissue_views, probe_view, tool_view, indi
     if not np.allclose(rest_centers, model['means'][:soft_count], atol=2e-6, rtol=0):
         raise ValueError('Gaussian prior does not match this anatomy; rerun prepare_gaussians.py')
     terrain = scan_terrain(np.concatenate([b.points for b in bodies]))
-    server = LiveServer(model, args.live_port, args.live_autoplay)
+    us_dir = args.output/'live_ultrasound'
+    workers, worker_logs = [], []
+    if args.live_ultrasound:
+        us_dir.mkdir(exist_ok=True)
+        root = Path(__file__).resolve().parents[2]
+        for mode in (['forward', 'inverse'] if args.live_ultrasound_inverse else ['forward']):
+            log = (us_dir/f'{mode}.log').open('w')
+            worker_logs.append(log)
+            command = [str(root/'.venv-ultrasound/bin/python'), '-u', str(root/'scripts/live_ultrasound_worker.py'),
+                       str(args.output.resolve()), '--mode', mode]
+            if mode == 'inverse':
+                command += ['--prior', str(args.anatomy.resolve()), '--gaussians', str(args.live_gaussians.resolve())]
+            workers.append(subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
+                env=dict(os.environ, OPENBLAS_NUM_THREADS='1', OMP_NUM_THREADS='1')))
+    server = LiveServer(model, args.live_port, args.live_autoplay,
+        ultrasound_dir=us_dir if args.live_ultrasound else None, reconstruction_dir=args.ultrasound_reconstruction)
     server.start()
     url = f'http://127.0.0.1:{args.live_port}'
     (args.output/'live_url.txt').write_text(url+'\n')
@@ -40,6 +58,10 @@ def run_live(args, app, world, bodies, tissue_views, probe_view, tool_view, indi
     total_simulation_time = 0.
     sequence = 0
     records = []
+    observation_deadline = 0.
+    epoch = 0
+    was_pressing = False
+    press_start = 0.
     start = previous = time.monotonic()
     next_tick = start
     dt = 1/args.live_physics_hz
@@ -52,17 +74,25 @@ def run_live(args, app, world, bodies, tissue_views, probe_view, tool_view, indi
             if controls['stop'] or (args.live_seconds and loop_start-start >= args.live_seconds):
                 break
             if controls['reset']:
+                epoch += 1
                 for body, view in zip(bodies, tissue_views):
                     view.set_nodal_positions(body.points.astype(np.float32)[None])
                     view.set_nodal_velocities(np.zeros((1, len(body.points), 3), np.float32))
                 simulation_time = 0.
                 current_pose = np.array([0, 0, float(np.interp(0., *terrain))+.012, 0, 0, 0, 1.])
                 yaw = 0.
-                server.command(dict(auto=False, x_mm=0., y_mm=0., press_mm=0., yaw_deg=0., paused=False))
+                server.command(dict(auto=False, us_press=False, x_mm=0., y_mm=0., press_mm=0., yaw_deg=0., paused=False))
                 controls = server.get_controls()
             physics_start = time.monotonic()
+            if controls['us_press'] and not was_pressing:
+                press_start = simulation_time
+            was_pressing = controls['us_press']
             for _ in range(steps if not controls['paused'] else 0):
-                if controls['auto']:
+                if controls['us_press']:
+                    stroke = .0015*(1-np.cos(2*np.pi*(simulation_time-press_start)/12))
+                    wanted = np.array([0., 0., 0.])
+                    wanted_yaw = 0.
+                elif controls['auto']:
                     clock = simulation_time % 24
                     wanted, wanted_yaw, stroke, _, _ = scan_pose(clock if clock <= 12 else 24-clock, 12, terrain)
                     stroke *= .6  # gentle automatic contact: at most 3 mm travel
@@ -93,6 +123,17 @@ def run_live(args, app, world, bodies, tissue_views, probe_view, tool_view, indi
             measured_pose = probe_view.get_transforms().numpy()[0]
             read_ms = (time.monotonic()-read_start)*1000
             actual_stroke = float(np.interp(measured_pose[1], *terrain))+.004-float(measured_pose[2])
+            if args.live_ultrasound and time.monotonic() >= observation_deadline:
+                qx, qy, qz, qw = measured_pose[3:]
+                rotation = np.array([[1-2*(qy*qy+qz*qz), 2*(qx*qy-qz*qw), 2*(qx*qz+qy*qw)],
+                    [2*(qx*qy+qz*qw), 1-2*(qx*qx+qz*qz), 2*(qy*qz-qx*qw)],
+                    [2*(qx*qz-qy*qw), 2*(qy*qz+qx*qw), 1-2*(qx*qx+qy*qy)]])@np.diag([1., -1., -1.])
+                temporary = us_dir/'physics.tmp.npz'
+                np.savez(temporary, **{f'positions_{i}': p for i, p in enumerate(positions)},
+                    probe_position=measured_pose[:3], probe_rotation=rotation, time=simulation_time,
+                    frame=sequence, capture_wall_time=time.time(), epoch=epoch)
+                os.replace(temporary, us_dir/'physics.npz')
+                observation_deadline = time.monotonic()+.25
             now = time.monotonic()
             interval = now-previous
             previous = now
@@ -125,6 +166,16 @@ def run_live(args, app, world, bodies, tissue_views, probe_view, tool_view, indi
             next_tick = max(next_tick, now-.1)
             time.sleep(max(0, next_tick-now))
     finally:
+        for worker in workers:
+            worker.terminate()
+        for worker in workers:
+            try:
+                worker.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                worker.kill()
+                worker.wait()
+        for log in worker_logs:
+            log.close()
         np.savez_compressed(args.output/'live_final_state.npz', probe_pose=current_pose,
             **{f'positions_{i}': points for i, points in enumerate(read_positions())})
         server.close()

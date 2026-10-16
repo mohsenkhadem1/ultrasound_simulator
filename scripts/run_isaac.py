@@ -36,6 +36,9 @@ def main():
     parser.add_argument('--live-physics-hz', type=int, default=90, help='live contact substeps per simulated second')
     parser.add_argument('--live-seconds', type=float, default=0., help='wall time limit for automated live checks; 0 runs until stopped')
     parser.add_argument('--live-autoplay', action='store_true')
+    parser.add_argument('--live-ultrasound', action='store_true', help='current-pose coherent-IQ PSF preview in the browser')
+    parser.add_argument('--live-ultrasound-inverse', action='store_true', help='infer incremental tissue motion from preview images and an elastic prior')
+    parser.add_argument('--ultrasound-reconstruction', type=Path, help='recorded RF-derived reconstruction bundle to serve alongside the live viewer')
     args = parser.parse_args()
     if args.headless and args.ultrasound_preview:
         parser.error('--ultrasound-preview requires a visible Isaac window')
@@ -53,6 +56,10 @@ def main():
         parser.error('live Gaussians require --headless, --anatomy, a moving probe and a positive --live-fps')
     if args.live_gaussians and (args.live_physics_hz < args.live_fps or args.live_physics_hz % args.live_fps):
         parser.error('--live-physics-hz must be a positive integer multiple of --live-fps')
+    if args.live_ultrasound and not args.live_gaussians:
+        parser.error('--live-ultrasound requires --live-gaussians')
+    if args.live_ultrasound_inverse and not args.live_ultrasound:
+        parser.error('--live-ultrasound-inverse requires --live-ultrasound')
 
     worker = None
     worker_log = None
@@ -127,6 +134,10 @@ def main():
             terrain = scan_terrain(np.concatenate([b.points for b in bodies]))
             initial_position = scan_pose(0, args.seconds, terrain)[0]
             anatomy['scatter_bounds'] = np.array([[-.035, -.044, .075], [.035, .045, .155]])
+            anatomy['acoustic_elevation_limit'] = .008
+        if args.live_ultrasound:
+            # The interactive controls sweep farther than the old short demo.
+            anatomy['scatter_bounds'] = np.array([[-.04, -.045, .075], [.04, .045, .165]])
             anatomy['acoustic_elevation_limit'] = .008
 
         def material(path, youngs):
