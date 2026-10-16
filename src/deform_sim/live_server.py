@@ -8,12 +8,13 @@ import numpy as np
 
 
 class LiveServer:
-    def __init__(self, model, port=8765, autoplay=False, ultrasound_dir=None, reconstruction_dir=None):
+    def __init__(self, model, port=8765, autoplay=False, ultrasound_dir=None, reconstruction_dir=None, comparison_dir=None):
         self.model, self.port = model, port
         self.ultrasound_dir = ultrasound_dir
         self.reconstruction_dir = reconstruction_dir
+        self.comparison_dir = comparison_dir
         self.controls = dict(x_mm=0., y_mm=0., press_mm=0., yaw_deg=0., auto=autoplay,
-                             paused=False, reset=False, stop=False, us_press=False)
+                             paused=False, reset=False, stop=False, us_press=False, record=False)
         self.lock = threading.Lock()
         self.latest = None
         self.sequence = 0
@@ -62,7 +63,8 @@ class LiveServer:
 
         async def static_file(request):
             name = request.match_info.get('name', 'index.html')
-            if name not in ('index.html', 'app.js', 'style.css', 'reconstruction.html', 'reconstruction.js'):
+            if name not in ('index.html', 'app.js', 'style.css', 'reconstruction.html', 'reconstruction.js',
+                            'comparison.html', 'comparison.js', 'comparison.css', 'gaussian_renderer.js', 'mesh_renderer.js'):
                 raise web.HTTPNotFound()
             return web.FileResponse(root/name)
 
@@ -73,6 +75,8 @@ class LiveServer:
             with self.lock:
                 data = dict(self.status, sequence=self.sequence, controls=self.controls.copy(),
                             ultrasound_enabled=self.ultrasound_dir is not None,
+                            reconstruction_enabled=self.reconstruction_dir is not None,
+                            anatomy_case=self.model.get('case'), anatomy_info=self.model.get('anatomy_info', {}),
                             gaussian_count=len(self.model['means']), soft_count=int(self.model['soft_count']))
             return web.json_response(data)
 
@@ -102,6 +106,17 @@ class LiveServer:
             if not path.exists():
                 raise web.HTTPNotFound()
             return web.FileResponse(path)
+
+        async def comparison_file(request):
+            import re
+            name = request.match_info['name']
+            if self.comparison_dir is None or not re.fullmatch(
+                    r'comparison\.json|mesh\.json|mesh_indices\.bin|static\.bin|(truth|predicted)_\d{8}\.bin|contours_\d{8}\.json|us_\d{8}\.png', name):
+                raise web.HTTPNotFound()
+            path = self.comparison_dir/name
+            if not path.exists():
+                raise web.HTTPNotFound()
+            return web.FileResponse(path, headers={'Cache-Control': 'no-store'})
 
         async def socket(request):
             stream = 'estimate' if request.query.get('stream') == 'estimate' else 'simulation'
@@ -152,9 +167,10 @@ class LiveServer:
             return ws
 
         app.router.add_get('/', static_file)
-        app.router.add_get('/{name:app.js|style.css|reconstruction.js|reconstruction.html}', static_file)
+        app.router.add_get('/{name:app.js|style.css|reconstruction.js|reconstruction.html|comparison.html|comparison.js|comparison.css|gaussian_renderer.js|mesh_renderer.js}', static_file)
         app.router.add_get('/ultrasound/{name}', ultrasound_file)
         app.router.add_get('/reconstruction/{name}', reconstruction_file)
+        app.router.add_get('/comparison/{name}', comparison_file)
         app.router.add_get('/model.bin', model_data)
         app.router.add_get('/api/status', status)
         app.router.add_post('/api/control', control)

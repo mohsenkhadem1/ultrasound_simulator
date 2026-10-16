@@ -52,6 +52,7 @@ def main():
     p.add_argument('--tumor', type=int, default=10000)
     p.add_argument('--ventricles', type=int, default=4000)
     p.add_argument('--seed', type=int, default=42)
+    p.add_argument('--depth-mm', type=float, default=50., help='acoustic plane depth for this prior')
     args = p.parse_args()
     reference = np.load(args.anatomy)
     bodies = load_bodies(reference)
@@ -67,7 +68,9 @@ def main():
     light = np.array([-.3, -.5, .8]); light /= np.linalg.norm(light)
     for semantic, count, color in [(0, args.brain, [.83, .47, .47]), (1, args.tumor, [.88, .19, .46]), (2, args.ventricles, [.15, .63, .93])]:
         points, cov, normal = sample_surface(reference[f'display_points_{semantic}'], reference[f'display_faces_{semantic}'], count, rng)
-        candidates = np.flatnonzero(region == 1 if semantic == 1 else region != 1)
+        # Acoustic and display surfaces share the complete FEM material map.
+        # Restricting a fine skin to a coarse labelled region extrapolates it.
+        candidates = np.arange(len(tets))
         ids, weights = bind(points, catalog, candidates)
         shade = .45+.55*np.abs(normal@light)
         result['means'].append(points); result['covariance'].append(cov)
@@ -84,7 +87,8 @@ def main():
         result['means'].append(points); result['covariance'].append(cov)
         result['colors'].append(np.tile(color, (count, 1)))
         result['opacity'].append(np.full(count, .95)); result['semantic'].append(np.full(count, 3))
-    corners = np.array([[-.02, 0, -.002], [.02, 0, -.002], [.02, 0, -.05], [-.02, 0, -.05], [-.02, 0, -.002]])
+    depth = args.depth_mm*.001
+    corners = np.array([[-.02, 0, -.002], [.02, 0, -.002], [.02, 0, -depth], [-.02, 0, -depth], [-.02, 0, -.002]])
     line = np.concatenate([a+(b-a)*np.linspace(0, 1, 48)[:, None] for a, b in zip(corners[:-1], corners[1:])])
     result['means'].append(line); result['covariance'].append(np.tile(np.eye(3)*.00022**2, (len(line), 1, 1)))
     result['colors'].append(np.tile([.03, .85, .90], (len(line), 1)))

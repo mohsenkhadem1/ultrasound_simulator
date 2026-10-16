@@ -38,6 +38,8 @@ def main():
     parser.add_argument('--live-autoplay', action='store_true')
     parser.add_argument('--live-ultrasound', action='store_true', help='current-pose coherent-IQ PSF preview in the browser')
     parser.add_argument('--live-ultrasound-inverse', action='store_true', help='infer incremental tissue motion from preview images and an elastic prior')
+    parser.add_argument('--live-tracker', choices=['lk', 'tvl1'], default='lk')
+    parser.add_argument('--inverse-data-weight', type=float, default=10., help='relative image constraint weight in the elastic inverse')
     parser.add_argument('--ultrasound-reconstruction', type=Path, help='recorded RF-derived reconstruction bundle to serve alongside the live viewer')
     args = parser.parse_args()
     if args.headless and args.ultrasound_preview:
@@ -48,6 +50,8 @@ def main():
         parser.error('seconds, fps and scatterers must be positive')
     if args.tumor_backscatter is not None and not 0 < args.tumor_backscatter < float('inf'):
         parser.error('--tumor-backscatter must be finite and positive')
+    if not 0 < args.inverse_data_weight < float('inf'):
+        parser.error('--inverse-data-weight must be finite and positive')
     if args.anatomy and args.probe_motion == 'fixed':
         parser.error('segmented brain anatomy requires --probe-motion press or sweep')
     if args.probe_motion == 'scan' and not args.anatomy:
@@ -137,7 +141,7 @@ def main():
             anatomy['acoustic_elevation_limit'] = .008
         if args.live_ultrasound:
             # The interactive controls sweep farther than the old short demo.
-            anatomy['scatter_bounds'] = np.array([[-.04, -.045, .075], [.04, .045, .165]])
+            anatomy['scatter_bounds'] = np.array([[-.04, -.045, probe_height-.09], [.04, .045, probe_height+.015]])
             anatomy['acoustic_elevation_limit'] = .008
 
         def material(path, youngs):
@@ -254,7 +258,12 @@ def main():
 
         args.output.mkdir(parents=True)
         (args.output/'state').mkdir()
-        scatter = sample_scatterers(bodies, args.scatterers, args.seed, amplitudes, anatomy.get('scatter_bounds'))
+        from deform_sim.phantom import apply_anatomical_acoustics, sample_anatomical_scatterers
+        if 'acoustic_brain_field' in anatomy:
+            scatter = sample_anatomical_scatterers(bodies, anatomy, args.scatterers, args.seed, amplitudes, anatomy['scatter_bounds'])
+        else:
+            scatter = sample_scatterers(bodies, args.scatterers, args.seed, amplitudes, anatomy.get('scatter_bounds'))
+            apply_anatomical_acoustics(anatomy, bodies, scatter, amplitudes)
         payload = dict(anatomy)
         payload['scatter_amplitudes'] = amplitudes
         payload.update({f'{key}_{i}': value for i, b in enumerate(bodies) for key, value in [('points', b.points), ('tets', b.tetrahedra), ('ids', b.global_ids)]})

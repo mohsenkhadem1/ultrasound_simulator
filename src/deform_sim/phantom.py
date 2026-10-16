@@ -81,6 +81,82 @@ def sample_scatterers(bodies, count=120000, seed=42, amplitudes=None, bounds=Non
     return dict(body=body, tet=tet.astype(np.int32), weights=weights, reflectivity=rc)
 
 
+def sample_material_field(reference, world, kind='tumor'):
+    """Trilinear MRI material sampling; dependency-free in the Isaac process."""
+    field = reference[f'acoustic_{kind}_field']
+    affine = reference[f'acoustic_world_to_{kind}_field']
+    coords = world@affine[:3, :3].T+affine[:3, 3]
+    lower = np.floor(coords).astype(np.int64)
+    fraction = coords-lower
+    result = np.zeros(len(world))
+    for offset in itertools.product([0, 1], repeat=3):
+        index = lower+offset
+        inside = np.all((index >= 0) & (index < np.asarray(field.shape)), axis=1)
+        weight = np.prod(np.where(np.asarray(offset), fraction, 1-fraction), axis=1)
+        result[inside] += field[tuple(index[inside].T)]*weight[inside]
+    return result
+
+
+def sample_anatomical_scatterers(bodies, reference, count, seed, amplitudes, bounds):
+    """Sample the continuous MRI anatomy and bind it to actual FEM tetrahedra.
+
+    Fine cortex/cavity boundaries are preserved instead of drawing the coarse
+    occupied cubes acoustically. Boundary samples may extrapolate outside the
+    coarse volume, using the same material map as the detailed display skin.
+    """
+    from scipy.spatial import cKDTree
+    rng = np.random.default_rng(seed)
+    bounds = np.asarray(bounds)
+    accepted, labels, total = [], [], 0
+    for _ in range(100):
+        proposal = rng.uniform(bounds[0], bounds[1], size=(max(10000, (count-total)*2), 3))
+        tumour = sample_material_field(reference, proposal) >= .5
+        brain = sample_material_field(reference, proposal, 'brain') >= .5
+        cavity = sample_material_field(reference, proposal, 'ventricles') >= .5
+        inside = (brain|tumour)&~cavity
+        accepted.append(proposal[inside]); labels.append(tumour[inside]); total += int(inside.sum())
+        if total >= count:break
+    if total < count:raise ValueError('insufficient MRI tissue inside acoustic sampling bounds')
+    points, tumour = np.concatenate(accepted)[:count], np.concatenate(labels)[:count]
+    offsets = np.r_[0, np.cumsum([len(b.points) for b in bodies])]
+    tets = np.concatenate([b.tetrahedra+offsets[i] for i,b in enumerate(bodies)])
+    region = np.repeat(np.arange(len(bodies)), [len(b.tetrahedra) for b in bodies])
+    local_tet = np.concatenate([np.arange(len(b.tetrahedra)) for b in bodies])
+    vertices = np.concatenate([b.points for b in bodies])[tets]
+    inverse = np.linalg.inv((vertices[:, 1:]-vertices[:, :1]).transpose(0, 2, 1))
+    tree = cKDTree(vertices.mean(axis=1))
+    selected, barycentric = [], []
+    for start in range(0, count, 10000):
+        chunk = points[start:start+10000]
+        _, candidates = tree.query(chunk, k=min(32, len(tets)))
+        tail = np.einsum('nkij,nkj->nki', inverse[candidates], chunk[:, None]-vertices[candidates, 0])
+        weights = np.concatenate((1-tail.sum(axis=2, keepdims=True), tail), axis=2)
+        best = np.sum(np.minimum(weights, 0)**2, axis=2).argmin(axis=1)
+        selected.append(candidates[np.arange(len(chunk)), best]); barycentric.append(weights[np.arange(len(chunk)), best])
+    selected, weights = np.concatenate(selected), np.concatenate(barycentric)
+    return dict(body=region[selected].astype(np.int32), tet=local_tet[selected].astype(np.int32), weights=weights,
+        reflectivity=rng.normal(size=count)*np.where(tumour, amplitudes[1], amplitudes[0]),
+        acoustic_tumor=tumour.astype(np.uint8), acoustic_extrapolated_fraction=float(np.mean(weights.min(axis=1)<-1e-6)))
+
+
+def apply_anatomical_acoustics(reference, bodies, scatter, amplitudes):
+    """Assign echoes from the detailed MRI boundary, not coarse FEM labels.
+
+    The labels and amplitudes are forward-model inputs only. Inverse workers
+    receive the rendered image and tracked pose, never these labels.
+    """
+    if 'acoustic_tumor_field' not in reference:
+        return
+    rest = advect(bodies, [b.points for b in bodies], scatter)
+    tumour = sample_material_field(reference, rest) >= .5
+    old_amplitude = np.asarray(amplitudes)[scatter['body']]
+    unit = np.divide(scatter['reflectivity'], old_amplitude,
+        out=np.zeros_like(scatter['reflectivity']), where=old_amplitude != 0)
+    amplitude = np.where(tumour, amplitudes[1], amplitudes[0])
+    scatter['reflectivity'] = unit*amplitude
+    scatter['acoustic_tumor'] = tumour.astype(np.uint8)
+
+
 def advect(bodies, positions, scatter):
     result = np.empty((len(scatter['body']), 3))
     for region, body in enumerate(bodies):

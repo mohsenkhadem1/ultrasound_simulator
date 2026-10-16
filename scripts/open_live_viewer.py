@@ -9,8 +9,9 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('--url', default='http://127.0.0.1:8765')
     p.add_argument('--reconstruction', action='store_true')
+    p.add_argument('--comparison', action='store_true', help='paired prediction / actual Isaac ground-truth panels')
     args = p.parse_args()
-    url = args.url.rstrip('/')+('/reconstruction.html' if args.reconstruction else '/')
+    url = args.url.rstrip('/')+('/comparison.html' if args.comparison else '/reconstruction.html' if args.reconstruction else '/')
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as context:

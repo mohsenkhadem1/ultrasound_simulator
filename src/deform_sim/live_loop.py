@@ -6,12 +6,15 @@ from pathlib import Path
 import subprocess
 import numpy as np
 from .live_server import LiveServer
-from .probe_motion import scan_terrain, scan_pose
+from .probe_motion import scan_terrain, scan_pose, contact_height_function
 
 
 def run_live(args, app, world, bodies, tissue_views, probe_view, tool_view, indices, gpu_id):
     import warp as wp
     model = dict(np.load(args.live_gaussians))
+    model['case'] = args.anatomy.parent.name
+    provenance_path = args.anatomy.parent/'provenance.json'
+    model['anatomy_info'] = json.loads(provenance_path.read_text()) if provenance_path.exists() else {}
     from isaacsim.core.simulation_manager import SimulationManager
     physics_view = SimulationManager.get_physics_simulation_view()
     native_views = [physics_view.create_volume_deformable_body_view(f'/World/Tissue_{i}') for i in range(len(bodies))]
@@ -28,22 +31,26 @@ def run_live(args, app, world, bodies, tissue_views, probe_view, tool_view, indi
     if not np.allclose(rest_centers, model['means'][:soft_count], atol=2e-6, rtol=0):
         raise ValueError('Gaussian prior does not match this anatomy; rerun prepare_gaussians.py')
     terrain = scan_terrain(np.concatenate([b.points for b in bodies]))
+    contact_height = contact_height_function(bodies)
     us_dir = args.output/'live_ultrasound'
     workers, worker_logs = [], []
     if args.live_ultrasound:
         us_dir.mkdir(exist_ok=True)
         root = Path(__file__).resolve().parents[2]
-        for mode in (['forward', 'inverse'] if args.live_ultrasound_inverse else ['forward']):
+        for mode in (['forward', 'inverse', 'comparison'] if args.live_ultrasound_inverse else ['forward']):
             log = (us_dir/f'{mode}.log').open('w')
             worker_logs.append(log)
             command = [str(root/'.venv-ultrasound/bin/python'), '-u', str(root/'scripts/live_ultrasound_worker.py'),
                        str(args.output.resolve()), '--mode', mode]
-            if mode == 'inverse':
+            if mode in ('inverse', 'comparison'):
                 command += ['--prior', str(args.anatomy.resolve()), '--gaussians', str(args.live_gaussians.resolve())]
+            if mode == 'inverse':
+                command += ['--tracker', args.live_tracker, '--inverse-data-weight', str(args.inverse_data_weight)]
             workers.append(subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
                 env=dict(os.environ, OPENBLAS_NUM_THREADS='1', OMP_NUM_THREADS='1')))
     server = LiveServer(model, args.live_port, args.live_autoplay,
-        ultrasound_dir=us_dir if args.live_ultrasound else None, reconstruction_dir=args.ultrasound_reconstruction)
+        ultrasound_dir=us_dir if args.live_ultrasound else None, reconstruction_dir=args.ultrasound_reconstruction,
+        comparison_dir=args.output/'comparison' if args.live_ultrasound_inverse else None)
     server.start()
     url = f'http://127.0.0.1:{args.live_port}'
     (args.output/'live_url.txt').write_text(url+'\n')
@@ -79,7 +86,7 @@ def run_live(args, app, world, bodies, tissue_views, probe_view, tool_view, indi
                     view.set_nodal_positions(body.points.astype(np.float32)[None])
                     view.set_nodal_velocities(np.zeros((1, len(body.points), 3), np.float32))
                 simulation_time = 0.
-                current_pose = np.array([0, 0, float(np.interp(0., *terrain))+.012, 0, 0, 0, 1.])
+                current_pose = np.array([0, 0, contact_height(0., 0.)+.012, 0, 0, 0, 1.])
                 yaw = 0.
                 server.command(dict(auto=False, us_press=False, x_mm=0., y_mm=0., press_mm=0., yaw_deg=0., paused=False))
                 controls = server.get_controls()
@@ -89,8 +96,9 @@ def run_live(args, app, world, bodies, tissue_views, probe_view, tool_view, indi
             was_pressing = controls['us_press']
             for _ in range(steps if not controls['paused'] else 0):
                 if controls['us_press']:
-                    stroke = .0015*(1-np.cos(2*np.pi*(simulation_time-press_start)/12))
-                    wanted = np.array([0., 0., 0.])
+                    phase = 2*np.pi*(simulation_time-press_start)/16
+                    stroke = .002*(1-np.cos(phase))
+                    wanted = np.array([.0015*np.sin(phase), 0., 0.])
                     wanted_yaw = 0.
                 elif controls['auto']:
                     clock = simulation_time % 24
@@ -102,12 +110,13 @@ def run_live(args, app, world, bodies, tissue_views, probe_view, tool_view, indi
                                        float(np.interp(controls['y_mm']*.001, *terrain))+.004-stroke])
                     wanted_yaw = np.deg2rad(controls['yaw_deg'])
                 # Substep rate limits keep dragging/slider jumps from teleporting contact.
+                wanted[1] = np.clip(wanted[1], terrain[0][0], terrain[0][-1])
                 difference = wanted[:2]-current_pose[:2]
                 length = np.linalg.norm(difference)
                 current_pose[:2] += difference*min(1., .025*dt/max(length, 1e-12))
                 # Follow terrain at the ACTUAL rate-limited position. Using the
                 # desired position can drive the head below a slope on return.
-                wanted_z = float(np.interp(current_pose[1], *terrain))+.004-stroke
+                wanted_z = contact_height(*current_pose[:2], yaw)+.004-stroke
                 current_pose[2] += np.clip(wanted_z-current_pose[2], -.008*dt, .035*dt)
                 yaw += np.clip(wanted_yaw-yaw, -np.deg2rad(45)*dt, np.deg2rad(45)*dt)
                 current_pose[3:] = [0, 0, np.sin(yaw/2), np.cos(yaw/2)]
@@ -122,7 +131,7 @@ def run_live(args, app, world, bodies, tissue_views, probe_view, tool_view, indi
             positions = read_positions()
             measured_pose = probe_view.get_transforms().numpy()[0]
             read_ms = (time.monotonic()-read_start)*1000
-            actual_stroke = float(np.interp(measured_pose[1], *terrain))+.004-float(measured_pose[2])
+            actual_stroke = contact_height(*measured_pose[:2], yaw)+.004-float(measured_pose[2])
             if args.live_ultrasound and time.monotonic() >= observation_deadline:
                 qx, qy, qz, qw = measured_pose[3:]
                 rotation = np.array([[1-2*(qy*qy+qz*qz), 2*(qx*qy-qz*qw), 2*(qx*qz+qy*qw)],
@@ -131,7 +140,7 @@ def run_live(args, app, world, bodies, tissue_views, probe_view, tool_view, indi
                 temporary = us_dir/'physics.tmp.npz'
                 np.savez(temporary, **{f'positions_{i}': p for i, p in enumerate(positions)},
                     probe_position=measured_pose[:3], probe_rotation=rotation, time=simulation_time,
-                    frame=sequence, capture_wall_time=time.time(), epoch=epoch)
+                    frame=sequence, capture_wall_time=time.time(), epoch=epoch, record=controls['record'])
                 os.replace(temporary, us_dir/'physics.npz')
                 observation_deadline = time.monotonic()+.25
             now = time.monotonic()

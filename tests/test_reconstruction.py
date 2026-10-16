@@ -1,7 +1,8 @@
 import unittest
 import numpy as np
 from scipy.ndimage import gaussian_filter, shift
-from deform_sim.reconstruction import Observation, TrackedVolume, estimate_inplane_motion, advance_material_tracks
+from deform_sim.reconstruction import (Observation, TrackedVolume, estimate_inplane_motion,
+    advance_material_tracks, track_material_points, advance_material_tracks_lk)
 from deform_sim.fast_ultrasound import FastUltrasound
 from deform_sim.inverse_elasticity import ElasticInverse
 from deform_sim.phantom import make_phantom
@@ -86,6 +87,32 @@ class ReconstructionTests(unittest.TestCase):
         self.assertLess(abs(col/(image.shape[1]-1)*.04-.02), .0005)
         cancelled = renderer.render(np.repeat(xyz, 2, axis=0), np.array([1., -1.]))
         self.assertEqual(float(cancelled.max()), 0.)
+
+    def test_sparse_tracking_compensates_probe_and_recovers_known_tissue_motion(self):
+        rng = np.random.default_rng(16)
+        texture = gaussian_filter(rng.normal(size=(96, 96)), 1)
+        image = .3+.5*(texture-texture.min())/np.ptp(texture)
+        rotation = np.diag([1., -1., -1.])
+        anchor = Observation(image, np.array([0., 0., .04]), rotation, 0, -.0095, .0095, .002, .021)
+        moved = Observation(shift(image, (1.5, -.8), mode='nearest'), anchor.position, rotation, .25,
+            anchor.lateral_min, anchor.lateral_max, anchor.depth_min, anchor.depth_max)
+        rr, cc = np.mgrid[24:72:8, 24:72:8]
+        world = anchor.world_points(rr.ravel(), cc.ravel())
+        motion, confidence = track_material_points(anchor, moved, world)
+        self.assertGreater(np.count_nonzero(confidence>.6), 20)
+        np.testing.assert_allclose(np.median(motion[confidence>.6], axis=0), [-.00016, 0., -.0003], atol=.00004)
+        probe = Observation(shift(image, (-2, 0), mode='nearest'), anchor.position+[0, 0, -.0004], rotation, .5,
+            anchor.lateral_min, anchor.lateral_max, anchor.depth_min, anchor.depth_max)
+        compensated, quality = track_material_points(anchor, probe, world)
+        self.assertLess(np.median(np.linalg.norm(compensated[quality>.6], axis=1)), .00002)
+
+    def test_extended_ultrasound_depth_has_consistent_metric_calibration(self):
+        renderer = FastUltrasound(size=256, depth_max=.08)
+        image = renderer.render(np.array([[.004, 0., .062]]), np.ones(1))
+        row, col = np.unravel_index(image.argmax(), image.shape)
+        observation = Observation(image, np.zeros(3), np.eye(3), 0, **renderer.calibration)
+        world = observation.world_points(np.array([row]), np.array([col]))
+        np.testing.assert_allclose(world[0], [.004, 0, .062], atol=.0004)
 
 
 if __name__ == '__main__':

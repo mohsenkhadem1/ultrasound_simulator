@@ -133,3 +133,71 @@ def advance_material_tracks(previous, current, initial_world, inferred_displacem
     confidence *= valid
     target[~valid] = cumulative[~valid]
     return target, confidence
+
+
+def track_material_points(previous, current, world):
+    """Fast pose-compensated pyramidal LK with backward and patch-NCC checks.
+
+    Measurements come only from images and calibrated poses. Sparse tracking
+    avoids a slow dense flow solve and lets the inverse consume adjacent frames.
+    """
+    import cv2
+    cv2.setNumThreads(1)
+    normal = previous.rotation[:, 1]
+    if abs(float((current.position-previous.position)@normal)) > .0005 or float(normal@current.rotation[:, 1]) < np.cos(np.deg2rad(1)):
+        return None
+    aligned, _, inside = current.sample_world(previous.world_points())
+    local = (world-previous.position)@previous.rotation
+    h, w = previous.image.shape
+    cols = (local[:, 0]-previous.lateral_min)/(previous.lateral_max-previous.lateral_min)*(w-1)
+    rows = (local[:, 2]-previous.depth_min)/(previous.depth_max-previous.depth_min)*(h-1)
+    start = np.column_stack((cols, rows)).astype(np.float32).reshape(-1, 1, 2)
+    a = np.round(np.clip(previous.image, 0, 1)*255).astype(np.uint8)
+    b = np.round(np.clip(aligned, 0, 1)*255).astype(np.uint8)
+    params = dict(winSize=(21, 21), maxLevel=3,
+        criteria=(cv2.TERM_CRITERIA_EPS|cv2.TERM_CRITERIA_COUNT, 30, .01), minEigThreshold=1e-5)
+    end, ok, _ = cv2.calcOpticalFlowPyrLK(a, b, start, None, **params)
+    backward, reverse_ok, _ = cv2.calcOpticalFlowPyrLK(b, a, end, None, **params)
+    forward_error = np.linalg.norm(backward[:, 0]-start[:, 0], axis=1)
+    delta = end[:, 0]-start[:, 0]
+    # Evaluate normalized patches at the recovered locations rather than
+    # trusting an internally converged flow with a decorrelated speckle patch.
+    yy, xx = np.mgrid[-5:6, -5:6]
+    def patches(image, points):
+        result = map_coordinates(image,
+            [(points[:, 1, None]+yy.ravel()).ravel(), (points[:, 0, None]+xx.ravel()).ravel()],
+            order=1, mode='constant', cval=0).reshape(len(points), -1)
+        return result-result.mean(axis=1, keepdims=True)
+    pa, pb = patches(previous.image, start[:, 0]), patches(aligned, end[:, 0])
+    ncc = np.sum(pa*pb, axis=1)/np.maximum(np.linalg.norm(pa, axis=1)*np.linalg.norm(pb, axis=1), 1e-8)
+    confidence = np.exp(-.5*(forward_error/.75)**2)*np.clip((ncc-.35)/.55, 0, 1)
+    valid = (ok[:, 0]>0)&(reverse_ok[:, 0]>0)&(cols>11)&(cols<w-12)&(rows>11)&(rows<h-12)
+    valid &= (end[:, 0, 0]>11)&(end[:, 0, 0]<w-12)&(end[:, 0, 1]>11)&(end[:, 0, 1]<h-12)
+    valid &= map_coordinates(inside.astype(float), [end[:, 0, 1], end[:, 0, 0]], order=0, mode='constant')>.5
+    confidence *= valid & np.isfinite(delta).all(axis=1)
+    delta = np.nan_to_num(delta)
+    motion = delta[:, :1]*(previous.lateral_max-previous.lateral_min)/(w-1)*previous.rotation[:, 0]
+    motion += delta[:, 1:]*(previous.depth_max-previous.depth_min)/(h-1)*previous.rotation[:, 2]
+    confidence *= np.linalg.norm(motion, axis=1) < .004
+    return motion, confidence.astype(np.float32)
+
+
+def advance_material_tracks_lk(previous, current, initial_world, inferred_displacement, cumulative, reference=None):
+    motion = track_material_points(previous, current, initial_world+inferred_displacement)
+    if motion is None:
+        return None
+    increment, confidence = motion
+    target = cumulative+increment*(confidence >= .35)[:, None]
+    if reference is not None and current.time-reference.time > .5:
+        direct = track_material_points(reference, current, initial_world)
+        if direct is not None:
+            absolute, reliability = direct
+            # Strong reference matches replace accumulated motion, allowing
+            # image-based recovery after release without a force/time command.
+            trusted = reliability > .9
+            target[trusted] = absolute[trusted]
+            confidence[trusted] = reliability[trusted]
+    valid = np.linalg.norm(target, axis=1) <= .005
+    confidence *= valid
+    target[~valid] = cumulative[~valid]
+    return target, confidence

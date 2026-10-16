@@ -1,9 +1,42 @@
 import unittest
 import numpy as np
-from deform_sim.phantom import make_phantom, sample_scatterers, advect, probe_coordinates, acoustic_scatterers, BodyMesh, load_bodies, surface_positions
+from deform_sim.phantom import (make_phantom, sample_scatterers, advect, probe_coordinates,
+    acoustic_scatterers, BodyMesh, load_bodies, surface_positions, sample_material_field,
+    apply_anatomical_acoustics, sample_anatomical_scatterers)
 
 
 class PhantomTests(unittest.TestCase):
+    def test_fine_anatomy_scatterers_respect_cavity_and_keep_material_transport(self):
+        body, _ = make_phantom(5)
+        affine = np.array([[25.,0,0,.5],[0,50.,0,.5],[0,0,25.,0],[0,0,0,1.]])
+        tumour = np.zeros((2,2,2)); tumour[1] = 1
+        cavity = np.zeros((2,2,2)); cavity[:,:,1] = 1
+        reference = dict(acoustic_tumor_field=tumour, acoustic_world_to_tumor_field=affine,
+            acoustic_brain_field=np.ones((2,2,2)), acoustic_world_to_brain_field=affine,
+            acoustic_ventricles_field=cavity, acoustic_world_to_ventricles_field=affine)
+        scatter = sample_anatomical_scatterers(body, reference, 500, 17, [1.,3.],
+            [[-.02,-.01,0],[.02,.01,.04]])
+        rest = advect(body, [b.points for b in body], scatter)
+        self.assertLess(rest[:,2].max(), .02)
+        np.testing.assert_array_equal(scatter['acoustic_tumor'], rest[:,0]>=0)
+        moved = advect(body, [b.points*1.02+[.001,-.002,.003] for b in body], scatter)
+        np.testing.assert_allclose(moved, rest*1.02+[.001,-.002,.003],atol=1e-14)
+
+    def test_acoustic_boundary_uses_fine_material_field_instead_of_body_id(self):
+        field = np.zeros((2, 2, 2)); field[1] = 1
+        reference = dict(acoustic_tumor_field=field, acoustic_world_to_tumor_field=np.eye(4))
+        points = np.array([[.2, .5, .5], [.5, .5, .5], [.8, .5, .5]])
+        np.testing.assert_allclose(sample_material_field(reference, points), [.2, .5, .8])
+        bodies, _ = make_phantom(5)
+        scatter = sample_scatterers(bodies, 500, seed=14, amplitudes=[1., 3.])
+        original = scatter['reflectivity'].copy()
+        original /= np.array([1., 3.])[scatter['body']]
+        reference['acoustic_world_to_tumor_field'] = np.array([[25.,0,0,.5],[0,50.,0,.5],[0,0,25.,0],[0,0,0,1.]])
+        apply_anatomical_acoustics(reference, bodies, scatter, [1., 3.])
+        rest = advect(bodies, [b.points for b in bodies], scatter)
+        np.testing.assert_array_equal(scatter['acoustic_tumor'], rest[:, 0]>=0)
+        np.testing.assert_allclose(scatter['reflectivity'], original*np.where(rest[:, 0]>=0, 3., 1.))
+
     def test_scatterers_cover_more_than_two_regions_and_keep_their_material(self):
         base = self.bodies[1]
         bodies = [BodyMesh(base.points+[i*.02, 0, 0], base.tetrahedra, base.global_ids+i*1000) for i in range(4)]

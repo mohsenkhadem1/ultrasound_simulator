@@ -31,11 +31,16 @@ def download_segmentations(destination, patient):
     series = json.load(urllib.request.urlopen(url, timeout=60))
     (destination/'series.json').write_text(json.dumps(series, indent=2)+'\n')
     sources = []
+    brain_reference = None
     for structure in ('cerebrum', 'tumor', 'ventricles'):
         candidates = [s for s in series if s['SeriesDescription'].lower().startswith(structure+' seg') and s.get('StudyDesc') == 'Preop']
         if not candidates:
             raise ValueError(f'{patient} has no preoperative {structure} segmentation')
+        if structure == 'tumor' and brain_reference:
+            candidates.sort(key=lambda s: not s['SeriesDescription'].endswith(brain_reference))
         s = candidates[0]
+        if structure == 'cerebrum':
+            brain_reference = s['SeriesDescription'].split('MR ref:')[-1].strip()
         archive = destination/(structure+'.zip')
         if not archive.exists():
             print('Downloading', patient, structure, flush=True)
@@ -92,11 +97,24 @@ def surface(volume, affine, stride=1):
 
 
 def embed_skin(points, bodies):
+    """Use the same piecewise-affine material map as acoustic scatterers."""
     nodes = np.concatenate([b.points for b in bodies])
-    distance, ids = cKDTree(nodes).query(points, k=4)
-    weights = 1/np.maximum(distance, 1e-8)**2
-    weights /= weights.sum(axis=1, keepdims=True)
-    return ids.astype(np.int32), weights
+    offsets = np.r_[0, np.cumsum([len(b.points) for b in bodies])]
+    tets = np.concatenate([b.tetrahedra+offsets[i] for i, b in enumerate(bodies)])
+    vertices = nodes[tets]
+    inverse = np.linalg.inv((vertices[:, 1:]-vertices[:, :1]).transpose(0, 2, 1))
+    tree = cKDTree(vertices.mean(axis=1))
+    result_nodes, result_weights = [], []
+    for start in range(0, len(points), 20000):
+        p = points[start:start+20000]
+        _, ids = tree.query(p, k=min(32, len(tets)))
+        tail = np.einsum('nkij,nkj->nki', inverse[ids], p[:, None]-vertices[ids, 0])
+        weights = np.concatenate((1-tail.sum(axis=2, keepdims=True), tail), axis=2)
+        penalty = np.minimum(weights, 0.)**2
+        best = penalty.sum(axis=2).argmin(axis=1)
+        selected = ids[np.arange(len(p)), best]
+        result_nodes.append(tets[selected]); result_weights.append(weights[np.arange(len(p)), best])
+    return np.concatenate(result_nodes).astype(np.int32), np.concatenate(result_weights)
 
 
 def main():
@@ -187,10 +205,23 @@ def main():
     footprint = (np.abs(all_points[:, 0]) <= .027) & (np.abs(all_points[:, 1]) <= .012)
     probe_height = float(all_points[footprint, 2].max()+.004)
     moduli = args.brain_youngs*np.array([1, args.tumor_ratio, 1-args.variation, 1+args.variation])
+    # The acoustic tissue boundary is the same 0.5 isosurface used by surface(),
+    # independent of the coarse FEM material bands. Coordinates include padding.
+    tumour_field = gaussian_filter(np.pad(volumes['tumor'][0].astype(np.float32), 1), .6)
+    padded_to_raw = np.eye(4); padded_to_raw[:3, 3] = -1
+    world_to_tumour_field = np.linalg.inv(world@volumes['tumor'][1]@padded_to_raw)
+    acoustic_fields = {}
+    for name, stride in [('brain', 3), ('ventricles', 1)]:
+        volume_name = 'cerebrum' if name == 'brain' else name
+        grid_to_raw = np.diag([float(stride)]*3+[1.]); grid_to_raw[:3, 3] = -stride
+        field = gaussian_filter(np.pad(volumes[volume_name][0][::stride, ::stride, ::stride].astype(np.float32), 1), .6)
+        acoustic_fields[f'acoustic_{name}_field'] = field
+        acoustic_fields[f'acoustic_world_to_{name}_field'] = np.linalg.inv(world@volumes[volume_name][1]@grid_to_raw)
     np.savez_compressed(args.output/'anatomy.npz', body_count=4, **payload,
                         youngs_modulus=moduli, scatter_amplitudes=[1., 1.5, 1., 1.],
                         scatter_bounds=[[-.035, -.015, probe_height-.05], [.035, .018, probe_height]],
-                        probe_height=probe_height, lps_mm_to_world=world)
+                        probe_height=probe_height, lps_mm_to_world=world,
+                        acoustic_tumor_field=tumour_field, acoustic_world_to_tumor_field=world_to_tumour_field, **acoustic_fields)
     info = dict(dataset='ReMIND', patient=args.patient, source='https://www.cancerimagingarchive.net/collection/remind/',
                 doi='10.7937/3RAG-D070', license='CC BY 4.0', source_series=sources,
                 material_regions=['brain middle band', 'glioma', 'brain softer band', 'brain firmer band'],
@@ -198,9 +229,13 @@ def main():
                 tumor_inside_cerebrum_fraction=overlap,
                 nodes=[len(b.points) for b in bodies], tetrahedra=[len(b.tetrahedra) for b in bodies],
                 probe_height_m=probe_height, tumor_depth_m=float(probe_height-skins['tumor'][0][:, 2].mean()),
+                tumor_extent_world_mm=(np.ptp(skins['tumor'][0], axis=0)*1000).tolist(),
+                tumor_segmentation_volume_ml=float(np.count_nonzero(volumes['tumor'][0])*abs(np.linalg.det(volumes['tumor'][1][:3, :3]))/1000),
+                acoustic_boundary='same smoothed MRI 0.5 isosurface as the tumour display mesh',
+                skin_binding='piecewise-affine FEM tetrahedral coordinates, matching scatterer transport',
                 limitations=['Stiffness values and spatial bands are illustrative, not measured patient properties.',
                              'Acoustic scatterers are sampled only in the local swept imaging region; far-field scattering is omitted.',
-                             'Coarse Cartesian tetrahedral mesh; fine segmentation surfaces use inverse-distance displacement interpolation.',
+                             'Coarse Cartesian FEM material regions; fine surfaces use tetrahedral binding and may extrapolate outside the coarse exterior.',
                              'Ventricles are cavities with a visual skin; no CSF fluid dynamics, skull or meninges.',
                              'No vessels in this case segmentation. TopBrain vessels are a different subject and kept separate.'])
     (args.output/'provenance.json').write_text(json.dumps(info, indent=2)+'\n')

@@ -1,5 +1,6 @@
 # Anatomy and image-based reconstruction; install after requirements-ultrasound.lock.
 pyamg==5.3.0
+opencv-python-headless==5.0.0.93
 pydicom==3.0.1
 scikit-image==0.25.2
 nibabel==5.3.2

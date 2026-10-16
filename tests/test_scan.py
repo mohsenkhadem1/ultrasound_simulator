@@ -1,10 +1,18 @@
 import unittest
 import numpy as np
-from deform_sim.probe_motion import scan_pose
+from deform_sim.probe_motion import scan_pose, contact_height_function
+from deform_sim.phantom import make_phantom, BodyMesh
 from deform_sim.slice_geometry import plane_segments
 
 
 class ScanTests(unittest.TestCase):
+    def test_contact_height_excludes_high_tissue_outside_actual_head(self):
+        bodies, _ = make_phantom(5)
+        high = [BodyMesh(b.points+[0,.02,.02], b.tetrahedra, b.global_ids+10000) for b in bodies]
+        height = contact_height_function(bodies+high)
+        self.assertAlmostEqual(height(0.,0.), .04)
+        self.assertAlmostEqual(height(0.,.02), .06)
+
     def test_scan_crosses_target_adds_pressure_then_lifts_without_pose_jumps(self):
         terrain = (np.array([-.04, .04]), np.array([.14, .14]))
         start = scan_pose(0, 6, terrain)

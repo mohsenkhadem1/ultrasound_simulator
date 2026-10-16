@@ -1,11 +1,78 @@
 # Isaac Sim deformable brain and tissue with acoustic ultrasound
 
+The live default is now **ReMIND-041**, a measured 2.257 mL tumour with dimensions
+approximately 19 × 18 × 18 mm. The earlier ReMIND-001 lesion was about 27 mL.
+This is a different patient segmentation, preserved at its physical scale.
+The selection checks source voxel volume, clinical whole-tumour volume,
+histopathology and physical tumour/brain overlap; it excludes inflammatory
+non-tumour cases and ambiguous small masks that disagree with whole-tumour volume.
+Source: [TCIA ReMIND](https://www.cancerimagingarchive.net/collection/remind/),
+CC BY 4.0. Source series and hashes are saved in each case's `provenance.json`.
+
+Live ultrasound now samples the detailed MRI brain, tumour and ventricular
+boundaries, with persistent material scatterers transported by FEM tetrahedral
+coordinates. This removes the previous acoustic 5 mm block boundaries while
+keeping the physics mesh coarse. Fine exterior samples can extrapolate outside
+that coarse mesh, just as the MRI display skins do. The live field extends to
+80 mm depth on a 256 × 256 grid, and all slice overlays use its metric calibration.
+The probe clearance uses its actual head footprint instead of a broad scan envelope.
+
+The live estimator uses pose-compensated pyramidal Lucas–Kanade tracking,
+forward/backward and patch-correlation checks, strong reference-image matches,
+and an elastic inverse with data weight 10. Rejected targets do not accumulate.
+This replaces the slower live TV-L1 tracker; TV-L1 remains available as a replay
+baseline and for existing recorded RF reconstruction. Synthetic validation and
+the remaining limitations are recorded in
+[the reconstruction notes](docs/ULTRASOUND_RECONSTRUCTION.md).
+
+On a separate 128-frame synthetic scan with a different speckle seed and probe
+trajectory, mean tumour contour error fell from **0.447 to 0.330 mm**, and mean
+3D tumour surface RMSE from **1.172 to 0.710 mm**, compared with the previous
+pipeline on identical observations. These are same-patient synthetic diagnostics;
+out-of-plane motion and some rejected updates remain limitations. The current
+paired view measured about **3–4 inverse updates/s and 32 display frames/s**.
+
+## Side-by-side tumour prediction and Isaac ground truth
+
+Run `bash scripts/run_live_brain.sh`, then open
+`http://127.0.0.1:8765/comparison.html` or run
+`.venv-ultrasound/bin/python scripts/open_live_viewer.py --comparison`.
+The left panel keeps the brain fixed and moves the tumour using the ultrasound
+image-driven elastic inverse. The right panel is a **conventional shaded triangle
+mesh**, transported by actual Isaac GPU FEM nodes at the same ultrasound
+timestamp. Isaac runs headless; the right panel renders its measured state rather
+than embedding the native Isaac viewport. It uses no Gaussian splats.
+
+**Start moving probe + press** translates the probe within the imaging plane and
+presses/releases through 0–4 mm commanded travel over a 16-second cycle. Both
+cameras orbit and zoom together. The observed ultrasound and a zoomed contour
+plot overlay the initial MRI tumour (dashed amber), ultrasound-updated MRI tumour
+(cyan) and Isaac ground truth (pink). Slice Dice, mean contour distance and
+whole-tumour corresponding-vertex RMSE compare both predictions with truth.
+All geometry is shown at actual scale; the close-up uses spatial zoom.
+
+A separate evaluation worker reads actual Isaac snapshots **after prediction**.
+It requires matching epoch, frame and image timestamp. Truth never enters the
+inverse observations. Full-resolution triangle/plane intersections supply the
+contours; display mesh decimation does not affect the contour scores. Predictions
+still begin with the MRI tumour prior and can drift or be worse than the initial
+contour. This is deformation tracking, not ultrasound tumour segmentation.
+Live images use the coherent-IQ PSF preview described below.
+
+```bash
+DISPLAY=:1 .venv-ultrasound/bin/python scripts/check_tumour_comparison.py
+```
+
+This check records the actual browser flow and verifies synchronized frames,
+changing predicted/actual tumour geometry, conventional ground-truth mesh
+rendering and WebGL errors. Evidence is saved under `outputs/tumour_comparison`.
+
 ## Ultrasound observations and 3D reconstruction
 
 The browser now displays the corresponding ultrasound image beside the 3D
 model. **Geometry source** switches between an ultrasound-driven estimate and
 the simulator reference. **Start fixed-plane press** keeps the plane observable
-while the probe gently presses and releases through a 3 mm commanded stroke.
+while the probe moves within the plane and presses/releases through a 4 mm commanded stroke.
 Moving to a different plane resets local
 motion observability. Image timestamps, image age and inverse update rate are
 displayed separately from the physics and viewer rates.
@@ -32,6 +99,11 @@ bash scripts/run_live_brain.sh
 # Or the RF-derived scan reconstruction:
 .venv-ultrasound/bin/python scripts/open_live_viewer.py --reconstruction
 ```
+
+To explicitly use the earlier patient, set `DEFORM_ANATOMY_DIR=data/remind-001`
+and `DEFORM_PATIENT=ReMIND-001`. Legacy recorded RF reconstruction is served only
+when `DEFORM_RECONSTRUCTION_DIR=outputs/ultrasound_reconstruction` is explicitly
+set, so it is not silently mixed with the smaller live case.
 
 The reconstruction uses image intensities, calibrated pixel coordinates,
 tracked probe poses and an **initial** elastic mesh. It does not ingest the
