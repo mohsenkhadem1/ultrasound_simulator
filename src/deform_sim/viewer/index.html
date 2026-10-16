@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Live deformable brain · Gaussian view</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<canvas id="scene" aria-label="Interactive 3D Gaussian brain and tumour"></canvas>
+<header><span class="mark">◉</span><div><h1>Deformable brain</h1><p>Live material Gaussians · patient mesh prior</p></div><span id="connection">Connecting…</span></header>
+<aside>
+ <div class="section"><div class="eyebrow">PROBE CONTACT</div><div class="buttons"><button id="auto">Start automatic scan</button><button id="pause">Pause</button></div>
+ <label>Push into tissue <output id="press-value">0.0 mm</output><input id="press" type="range" min="0" max="5" step="0.1" value="0"></label>
+ <label>Scan across tumour <output id="scan-value">0.0 mm</output><input id="scan" type="range" min="-32" max="32" step="0.25" value="0"></label>
+ <label>Move sideways <output id="side-value">0.0 mm</output><input id="side" type="range" min="-6" max="6" step="0.25" value="0"></label>
+ <label>Turn probe <output id="yaw-value">0.0°</output><input id="yaw" type="range" min="-15" max="15" step="0.5" value="0"></label>
+ <button id="reset" class="secondary">Reset tissue and probe</button></div>
+ <div class="section"><div class="eyebrow">3D VIEW</div>
+ <label class="row"><input id="cutaway" type="checkbox" checked> Open brain cutaway</label>
+ <label class="row"><input id="tumor-only" type="checkbox"> Isolate tumour</label>
+ <label class="row"><input id="plane" type="checkbox" checked> Show ultrasound plane</label>
+ <label>Brain opacity <input id="opacity" type="range" min="0.02" max="1" step="0.02" value="0.7"></label>
+ <label>Colour by <select id="colour"><option value="0">Anatomy</option><option value="1">Displacement · 0–5 mm</option><option value="2">Stiffness prior · 2–4 kPa</option><option value="3">Constitutive stress · 0–1 kPa</option></select></label>
+ <label>Motion magnification <select id="magnify"><option value="1">1× · actual deformation</option><option value="2">2× · view only</option><option value="4">4× · view only</option></select></label>
+ <div class="legend" id="anatomy-legend"><span><i class="brain"></i>Brain</span><span><i class="tumor"></i>Tumour</span><span><i class="ventricle"></i>Ventricles</span></div></div>
+ <div id="field-legend" hidden><div class="ramp"></div><div class="ramp-labels"><span id="field-low"></span><span id="field-high"></span></div></div>
+ <details><summary>Model and controls</summary><p>Drag to orbit. Scroll to zoom. Arrow keys move the probe; R/F increase/decrease pressure. Space pauses physics.</p><p>Gaussians follow Isaac Sim tissue mechanics. Covariance follows the local deformation gradient. Stiffness is an assumed prior. Stress colours show an analytic constitutive diagnostic.</p><p>This live mode is driven by simulation; it does not estimate deformation from an ultrasound stream. Acoustic RF rendering is a separate offline process.</p><a href="https://arxiv.org/abs/2511.06299" target="_blank" rel="noopener">PIDG paper ↗</a></details>
+</aside>
+<div class="metrics"><div><b id="motion">—</b><span>peak surface motion</span></div><div><b id="stream-rate">—</b><span>physics → Gaussian updates</span></div><div><b id="render-rate">—</b><span>viewer frames / second</span></div><div><b id="time">—</b><span>simulation time</span></div><div><b id="count">—</b><span>anisotropic Gaussians</span></div></div>
+<footer><span id="state">Starting the live view…</span><span id="renderer"></span></footer>
+<script type="module" src="/app.js"></script></body></html>

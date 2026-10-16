@@ -30,6 +30,12 @@ def main():
     parser.add_argument('--ultrasound-quality', choices=['preview', 'standard'], default='preview')
     parser.add_argument('--exit-after-preview', action='store_true', help='close Isaac after all acoustic preview frames finish')
     parser.add_argument('--capture-preview', action='store_true', help='save the Isaac window directly from the renderer')
+    parser.add_argument('--live-gaussians', type=Path, help='serve an interactive Gaussian model with live Isaac contact physics')
+    parser.add_argument('--live-port', type=int, default=8765)
+    parser.add_argument('--live-fps', type=int, default=30)
+    parser.add_argument('--live-physics-hz', type=int, default=90, help='live contact substeps per simulated second')
+    parser.add_argument('--live-seconds', type=float, default=0., help='wall time limit for automated live checks; 0 runs until stopped')
+    parser.add_argument('--live-autoplay', action='store_true')
     args = parser.parse_args()
     if args.headless and args.ultrasound_preview:
         parser.error('--ultrasound-preview requires a visible Isaac window')
@@ -43,6 +49,10 @@ def main():
         parser.error('segmented brain anatomy requires --probe-motion press or sweep')
     if args.probe_motion == 'scan' and not args.anatomy:
         parser.error('--probe-motion scan requires --anatomy')
+    if args.live_gaussians and (not args.headless or not args.anatomy or args.probe_motion == 'fixed' or args.live_fps <= 0):
+        parser.error('live Gaussians require --headless, --anatomy, a moving probe and a positive --live-fps')
+    if args.live_gaussians and (args.live_physics_hz < args.live_fps or args.live_physics_hz % args.live_fps):
+        parser.error('--live-physics-hz must be a positive integer multiple of --live-fps')
 
     worker = None
     worker_log = None
@@ -84,9 +94,10 @@ def main():
 
         settings = carb.settings.get_settings()
         settings.set_bool('/persistent/physics/enableDeformableBeta', True)
-        settings.set_bool('/physics/updateToUsd', True)
-        settings.set_bool('/physics/updateVelocitiesToUsd', True)
-        world = World(stage_units_in_meters=1.0, physics_dt=1/240, rendering_dt=1/240,
+        settings.set_bool('/physics/updateToUsd', not bool(args.live_gaussians))
+        settings.set_bool('/physics/updateVelocitiesToUsd', not bool(args.live_gaussians))
+        physics_dt = 1/args.live_physics_hz if args.live_gaussians else 1/240
+        world = World(stage_units_in_meters=1.0, physics_dt=physics_dt, rendering_dt=physics_dt,
                       backend='warp', device=f'cuda:{gpu_id}')
         stage = world.stage
         UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
@@ -266,7 +277,7 @@ def main():
                         inclusion='conforming tetrahedral regions with bonded shared vertices',
                         probe_motion=args.probe_motion, probe_prim_path=probe_path,
                         probe=('moving top head; depth -z, lateral +x, elevation -y; aperture 3 mm behind contact face' if pressing_probe else 'fixed at world (0,-0.015,0.02); depth +y, lateral +x, elevation -z'),
-                        dt=1/240, observation_fps=args.fps, seed=args.seed,
+                        dt=physics_dt, observation_fps=args.fps, seed=args.seed,
                         limitations='elasticity damping is not calibrated tissue viscoelasticity')
         (args.output/'metadata.json').write_text(json.dumps(metadata, indent=2)+'\n')
         if args.anatomy and args.anatomy.with_name('provenance.json').exists():
@@ -281,6 +292,10 @@ def main():
         tool_indices = wp.array([0], dtype=wp.int32, device=f'cuda:{gpu_id}')
         # Read authoritative GPU simulation nodes, avoiding stale USD/Fabric data.
         tissue_views = [DeformablePrim(path, deformable_type='volume') for path in paths]
+        if args.live_gaussians:
+            from deform_sim.live_loop import run_live
+            run_live(args, app, world, bodies, tissue_views, probe_view, tool_view, tool_indices, gpu_id)
+            return
         frame = 0
         max_displacement = 0.
         marker_mask = (scatter['body'] == 1) | (np.abs(advect(bodies, [b.points for b in bodies], scatter)[:, 2]-0.02) > 0.007)

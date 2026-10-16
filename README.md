@@ -1,5 +1,62 @@
 # Isaac Sim deformable brain and tissue with acoustic ultrasound
 
+## Live 3D Gaussian brain and tumour
+
+The live viewer uses the patient mesh prior to initialise 45,192 anisotropic
+Gaussians. Actual Isaac GPU contact physics moves their material coordinates;
+each soft Gaussian's covariance follows `F Sigma_0 F^T`, including compression
+and shear. The browser projects full covariances and depth-sorts alpha-composited
+splats using WebGL2. No prerecorded motion is used.
+
+```bash
+# After installing and preparing the ReMIND anatomy as described below:
+bash scripts/run_live_brain.sh
+# Open http://127.0.0.1:8765 in a WebGL2-capable browser.
+# Optional automatic probe motion:
+bash scripts/run_live_brain.sh --live-autoplay
+```
+
+Move and turn the probe with the sliders, push through 0–5 mm of commanded
+travel, or start the automatic scan. Pause and reset operate on the simulation.
+Orbit with the mouse and zoom with the scroll wheel. The view includes a brain
+cutaway, isolated tumour, displacement and stiffness colours, and an analytic
+stress diagnostic. Motion magnification is explicitly a display option; the
+default is actual scale. Blue structures are ventricles; the cyan rectangle
+marks the nominal acoustic plane, not a reconstructed image.
+
+The live default uses 90 Hz contact substeps and targets 30 Gaussian updates/s.
+The viewer displays measured stream and render rates separately. Use
+`--live-physics-hz 240` for the offline episode's smaller timestep at the cost of
+speed; the value must be a multiple of `--live-fps`. Rates depend on hardware and
+load. A local HTTP/WebSocket server binds only to `127.0.0.1`. Press Ctrl+C in
+the launching terminal to stop. Live outputs include metrics, metadata and a
+final nodal state; this mode does not record an acoustic episode.
+
+This is an adaptation inspired by
+[Physics-Informed Deformable Gaussian Splatting](https://arxiv.org/abs/2511.06299),
+using an explicit FEM/material prior. **It is not a reproduction of the paper's
+trained velocity/stress field or optical reconstruction system**, and does not
+estimate deformation from ultrasound. See [the method mapping](docs/PIDG_ADAPTATION.md).
+Acoustic RF simulation remains the separate offline process below.
+
+To regenerate the prior, run `.venv-ultrasound/bin/python scripts/prepare_gaussians.py`.
+The Gaussian server uses Isaac's existing `aiohttp` and Warp packages. The
+optional browser integration check requires Playwright 1.55.0 and Chromium:
+
+```bash
+.venv-ultrasound/bin/pip install playwright==1.55.0
+.venv-ultrasound/bin/python -m playwright install chromium
+# With the live simulation running, on a desktop display:
+DISPLAY=:1 .venv-ultrasound/bin/python scripts/check_live_brain.py
+```
+
+It checks actual pressing, pause, reset, scanning and WebGL errors, and records
+the real browser session under `outputs/live_gaussians_validation`.
+For a stopped live run with tissue still deformed,
+`.venv-ultrasound/bin/python scripts/validate_episode.py outputs/live_<timestamp> --live-final`
+checks every tetrahedron and bonded interface in its final nodal snapshot.
+That check covers the saved final state only, not every intermediate step.
+
 ## Patient brain, tumour, vessels and heterogeneous stiffness
 
 A brain demo now uses **ReMIND-001's actual cerebrum, glioma and ventricle
