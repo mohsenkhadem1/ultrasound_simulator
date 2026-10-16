@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deform-sim"
+version = "0.1.0"
+description = "Isaac Sim deformable tissue and acoustic ultrasound simulation"
+requires-python = ">=3.10"
+dependencies = ["numpy>=2.0"]
+
+[project.optional-dependencies]
+ultrasound = ["pymust==0.1.9", "Pillow>=10", "h5py>=3"]
+
+[project.scripts]
+ultrasound-render = "deform_sim.ultrasound:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,20 @@
+# Anatomy preparation only; install after requirements-ultrasound.lock.
+pydicom==3.0.1
+scikit-image==0.25.2
+nibabel==5.3.2
+meshio==5.3.5
+remotezip==0.12.3
+certifi==2026.7.22
+charset-normalizer==3.5.2
+idna==3.20
+imageio==2.38.1
+lazy-loader==0.6
+markdown-it-py==4.2.0
+mdurl==0.1.2
+networkx==3.7
+pygments==2.21.0
+requests==2.34.2
+rich==15.0.0
+tifffile==2026.9.20
+typing-extensions==4.16.0
+urllib3==2.8.0
